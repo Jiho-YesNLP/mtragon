@@ -1,0 +1,1 @@
+The MTRAG benchmark organizer maintains a git repo, which contains all the necessary corpora, querrries, and judgements. Here, `create_links.sh` will create symbolic links to the relevant files in the benchmark repo, assuming that the benchmark repo is checked out in a directory parallel to the project root directory.
