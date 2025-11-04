@@ -2,6 +2,7 @@ import code
 
 import json
 import os
+import sys
 from typing import List, Dict, Any
 import argparse
 
@@ -11,11 +12,22 @@ import Stemmer
 
 
 class BM25_Retriever:
-    def __init__(self, corpus_name: str, output_dir: str):
-        self.corpus_path = f"data/{corpus_name.lower()}.jsonl"
-        self.questions_path = f"data/{corpus_name.lower()}-questions.jsonl"
-        self.qrels_path = f"data/{corpus_name.lower()}-qrels.tsv"
+    def __init__(
+            self, 
+            corpus_name: str, 
+            output_dir: str,
+            input_file: str = '',
+            data_dir: str = 'data/raw'
+    ):
+        self.corpus_name = corpus_name.lower()
+        self.corpus_path = f"{data_dir}/corpora/passage_level/" + \
+            f"{self.corpus_name}.jsonl"
+        self.questions_path = f"{data_dir}/human/retrieval_tasks/" + \
+            f"{self.corpus_name}/{self.corpus_name}_questions.jsonl"
+        self.qrels_path = f"{data_dir}/human/retrieval_tasks/" + \
+            f"{self.corpus_name}/qrels/dev.tsv"
         self.output_dir = output_dir
+        self.input_file = input_file
         self.passages = self.load_corpus()
         # int id mapping
         self.iid2pid = {i: pid for i, pid in enumerate(self.passages.keys())}
@@ -40,48 +52,100 @@ class BM25_Retriever:
 
     def retrieve(self, top_k: int = 10) -> List[Dict[str, Any]]:
         # read questions
-        questions = []
-        with open(self.questions_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                entry = json.loads(line)
-                questions.append(entry)
+        # - if input_file is provided, use rewritten_queries
+        # - if not, use last turns from questions file
+        questions = {}
+        if self.input_file:
+            with open(self.input_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    entry = json.loads(line)
+                    questions[entry['_id']] = entry['rewritten_queries']
+        else:
+            with open(self.questions_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    entry = json.loads(line)
+                    questions[entry['_id']] = entry['text'].split("\n")[-1][8:]
 
-        # last turns
-        questions = { q['_id']: q['text'].split("\n")[-1][8:] for q in questions }
-        results_, scores = self.retriever.retrieve(
-            bm25s.tokenize(list(questions.values()), stemmer=self.stemmer), k=top_k
-        )
-
+        # retrieve (single questions)
         results = []
-        for (qid, (rids, scrs)) in zip(questions.keys(), zip(results_, scores)):
-            entry = {
-                "conversation_id": qid.split('<::>')[0],
-                "task_id": qid,
-                "turn": qid.split('<::>')[1],
-                "contexts": [
-                    {
-                        "document_id": self.iid2pid[rid],
-                        "score": float(scr)
-                    } for rid, scr in zip(rids, scrs)
-                ],
-                "Collection": f"mt-rag-{corpus_name.lower()}"
-            }
-            results.append(entry)
+        # check if questions is a dict of lists
+        if isinstance(list(questions.values())[0], list):
+            for qid, qlist in tqdm(questions.items(), desc=f"Retrieving for {self.corpus_name}"):
+                results_, scores = self.retriever.retrieve(
+                    bm25s.tokenize(qlist, stemmer=self.stemmer), k=top_k
+                )
+                # consolidate results for multiple questions
+                consolidated_contexts = {}
+                for (rids, scrs) in zip(results_, scores):
+                    for rid, scr in zip(rids, scrs):
+                        if rid not in consolidated_contexts:
+                            consolidated_contexts[rid] = scr
+                        else:
+                            consolidated_contexts[rid] += scr
+                # sort by score
+                sorted_contexts = sorted(
+                    consolidated_contexts.items(), 
+                    key=lambda x: x[1], 
+                    reverse=True
+                )[:top_k]
+                entry = {
+                    "conversation_id": qid.split('<::>')[0],
+                    "task_id": qid,
+                    "turn": qid.split('<::>')[1],
+                    "contexts": [
+                        {
+                            "document_id": self.iid2pid[rid],
+                            "score": float(scr)
+                        } for rid, scr in sorted_contexts
+                    ],
+                    "Collection": f"mt-rag-{self.corpus_name}"
+                }
+                results.append(entry)
+        else:
+            results_, scores = self.retriever.retrieve(
+                bm25s.tokenize(list(questions.values()), stemmer=self.stemmer), k=top_k
+            )
+
+            for (qid, (rids, scrs)) in zip(questions.keys(), zip(results_, scores)):
+                entry = {
+                    "conversation_id": qid.split('<::>')[0],
+                    "task_id": qid,
+                    "turn": qid.split('<::>')[1],
+                    "contexts": [
+                        {
+                            "document_id": self.iid2pid[rid],
+                            "score": float(scr)
+                        } for rid, scr in zip(rids, scrs)
+                    ],
+                    "Collection": f"mt-rag-{self.corpus_name}"
+                }
+                results.append(entry)
 
         return results
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser(description="Run BM25 Retriever on multiple corpora")
-    argparser.add_argument('--output-dir', type=str, default='./outputs', 
+    argparser.add_argument('--input_file', type=str, default=None,
+                            help='Path to (rewritten) questions file')
+    argparser.add_argument('--corpus_name', type=str, default=None,
+                           required='--input_file' in sys.argv,
+                           choices=['ClapNQ', 'Cloud', 'FiQA', 'Govt'],
+                           help='Name of the corpus to use (if input_file is provided)')
+    argparser.add_argument('--output_dir', type=str, default='./outputs', 
                            help='Output directory to save indexes and retrieval results')
     args = argparser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
 
-    corpora = ['ClapNQ', 'Cloud', 'FiQA', 'Govt']
-
     final_results = []
-    for corpus_name in corpora:
-        bm25_ret = BM25_Retriever(corpus_name, args.output_dir)
+
+    if args.input_file is None:
+        corpora = ['ClapNQ', 'Cloud', 'FiQA', 'Govt']
+        for corpus_name in corpora:
+            bm25_ret = BM25_Retriever(corpus_name, args.output_dir)
+            final_results.extend(bm25_ret.retrieve())
+    else:
+        bm25_ret = BM25_Retriever(args.corpus_name, args.output_dir,
+                                  input_file=args.input_file)
         final_results.extend(bm25_ret.retrieve())
 
     # save final results as jsonl

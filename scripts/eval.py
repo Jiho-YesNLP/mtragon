@@ -50,7 +50,6 @@ def evaluate(qrels: Dict[str, Dict[str, int]],
     
 
 def compute_results(results, qrels):
-
     k_values = [1, 3, 5, 10]
     if len(results) == 0:
         ndcg = _map = recall = precision = mrr = {i: '-' for i in k_values}
@@ -112,8 +111,10 @@ def enrich_json_retrieval(input_file, scores_per_instance, output_file):
 def main():
     
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_file", type=str, required=True, help="Path to input JSON file")
-    parser.add_argument("--output_file", type=str, required=True, help="Path to output JSON file")
+    parser.add_argument("--input_file", type=str, required=True, 
+                        help="Path to retrieval result file in JSON")
+    parser.add_argument("--output_file", type=str, required=True, 
+                        help="Path to output JSON file")
     
     args = parser.parse_args()
     input_file = args.input_file
@@ -131,13 +132,26 @@ def main():
         print("\ncollection_name:", collection_name)
 
         if collection_name == "mt-rag-clapnq":
-            qrels_file = os.path.join(script_dir, "../data/clapnq-qrels.tsv")
+            qrels_file = os.path.join(
+                script_dir, 
+                "../data/raw/human/retrieval_tasks/clapnq/qrels/dev.tsv"
+            )
         if collection_name == "mt-rag-govt":
-            qrels_file = os.path.join(script_dir, "../data/govt-qrels.tsv")
+            qrels_file = os.path.join(
+                script_dir, 
+                "../data/raw/human/retrieval_tasks/govt/qrels/dev.tsv"
+            )
+
         if collection_name == "mt-rag-fiqa":
-            qrels_file = os.path.join(script_dir, "../data/fiqa-qrels.tsv")
+            qrels_file = os.path.join(
+                script_dir,
+                "../data/raw/human/retrieval_tasks/fiqa/qrels/dev.tsv"
+            )
         if collection_name == "mt-rag-cloud":
-            qrels_file = os.path.join(script_dir, "../data/cloud-qrels.tsv")
+            qrels_file = os.path.join(
+                script_dir, 
+                "../data/raw/human/retrieval_tasks/cloud/qrels/dev.tsv"
+            )
             
         qrels = load_qrels(qrels_file)
         
